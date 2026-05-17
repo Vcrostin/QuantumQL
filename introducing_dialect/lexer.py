@@ -2,7 +2,7 @@ from typing import List
 from tokens import Token, TokenType
 
 class Lexer:
-    """Tokenizes QSQL source code."""
+    """Tokenizes QuantumQL source code."""
 
     KEYWORDS = {
         'PREPARE', 'STATE', 'FROM', 'USING', 'ON',
