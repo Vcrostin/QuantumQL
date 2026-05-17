@@ -254,7 +254,7 @@ class Generator:
         gate = stmt.gate.upper() if hasattr(stmt, 'gate') else 'CNOT'
 
         print(f"  [Entangle] '{reg_a_name}' ({reg_a.size}q) with '{reg_b_name}' "
-              f"({reg_b.size}q) using {gate} -> alias '{stmt.alias}'")
+            f"({reg_b.size}q) using {gate} -> alias '{stmt.alias}'")
 
         for ctrl, tgt in stmt.qubit_pairs:
             ctrl_idx = ctrl - 1
@@ -278,21 +278,25 @@ class Generator:
             else:
                 raise CircuitGenerationError(f"Unsupported gate: {gate}")
 
-        combined = QuantumRegister(
-            reg_a.size + reg_b.size,
-            name=stmt.alias
-        )
-        self._circuit.add_register(combined)
-        self._symbols[stmt.alias] = combined
+        self._symbols[stmt.alias] = (reg_a, reg_b)
 
         self._entanglement_groups[stmt.alias] = {reg_a_name, reg_b_name}
         self._entangled_to[reg_a_name] = stmt.alias
         self._entangled_to[reg_b_name] = stmt.alias
 
+    def _get_joint_qubits(self, joint_alias: str, source_reg_name: str) -> Tuple[List, List]:
+        joint = self._symbols[joint_alias]
+
+        if isinstance(joint, tuple):
+            reg_a, reg_b = joint
+            source_qubits = [reg_a[i] for i in range(reg_a.size)]
+            target_qubits = [reg_b[i] for i in range(reg_b.size)]
+            return source_qubits, target_qubits
+        else:
+            return [joint[i] for i in range(joint.size)], []
+
     def _handle_amplify_where(self, stmt) -> None:
         source_reg_name = stmt.source_register
-
-        resolved_name, source_reg = self._resolve_register(source_reg_name)
 
         if not self._is_available(source_reg_name):
             raise CircuitGenerationError(
@@ -312,9 +316,11 @@ class Generator:
                 f"Undefined correlation alias in condition: '{correlation_alias}'"
             )
 
-        joint_reg = self._symbols[correlation_alias]
+        source_qubits, target_qubits = self._get_joint_qubits(
+            correlation_alias, source_reg_name
+        )
 
-        source_size = source_reg.size if source_reg.name == resolved_name else self._symbols[source_reg_name].size
+        source_size = len(source_qubits)
 
         ancilla_name = f"ancilla_{correlation_alias}"
         if ancilla_name not in self._symbols:
@@ -324,13 +330,9 @@ class Generator:
         else:
             ancilla = self._symbols[ancilla_name]
 
-        mid = source_size
-
         print(f"  [AmplifyWhere] Source: '{source_reg_name}' ({source_size}q), "
-              f"Joint: '{correlation_alias}' ({joint_reg.size}q), "
-              f"Ancilla: '{ancilla_name}'")
-
-        target_qubits = [joint_reg[i] for i in range(mid, joint_reg.size)]
+            f"Joint: '{correlation_alias}', "
+            f"Ancilla: '{ancilla_name}'")
 
         if len(target_qubits) > 0:
             for q in target_qubits:
@@ -347,8 +349,6 @@ class Generator:
 
         print(f"  [AmplifyWhere] Grover iterations: {iterations}")
 
-        source_qubits = [joint_reg[i] for i in range(source_size)]
-
         for _ in range(iterations):
             self._circuit.cz(ancilla[0], source_qubits[0])
 
@@ -358,10 +358,7 @@ class Generator:
                 self._circuit.x(q)
             self._circuit.h(source_qubits[-1])
             if len(source_qubits) > 1:
-                self._circuit.mcx(
-                    source_qubits[:-1],
-                    source_qubits[-1]
-                )
+                self._circuit.mcx(source_qubits[:-1], source_qubits[-1])
             self._circuit.h(source_qubits[-1])
             for q in source_qubits:
                 self._circuit.x(q)
@@ -394,16 +391,14 @@ class Generator:
 
         if reg_name in self._entangled_to:
             joint_name = self._entangled_to[reg_name]
-            joint_reg = self._symbols[joint_name]
 
-            source_size = self._symbols[reg_name].size if reg_name in self._symbols else joint_reg.size // 2
+            source_qubits, _ = self._get_joint_qubits(joint_name, reg_name)
+            source_size = len(source_qubits)
 
             if joint_name in self._consumed:
                 raise CircuitGenerationError(
                     f"Joint register '{joint_name}' has already been consumed."
                 )
-
-            source_qubits = [joint_reg[i] for i in range(source_size)]
 
             creg = ClassicalRegister(source_size, name=stmt.output_name)
             self._circuit.add_register(creg)
@@ -415,8 +410,8 @@ class Generator:
             self._consumed.add(joint_name)
 
             print(f"  [Measure] Entangled register '{reg_name}' ({source_size}q) "
-                  f"from joint '{joint_name}' -> classical '{stmt.output_name}' "
-                  f"({creg.size} bits), shots={stmt.shots}")
+                f"from joint '{joint_name}' -> classical '{stmt.output_name}' "
+                f"({creg.size} bits), shots={stmt.shots}")
         else:
             if reg_name not in self._symbols:
                 raise CircuitGenerationError(f"Undefined register: '{reg_name}'")
